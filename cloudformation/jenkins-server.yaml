@@ -1,0 +1,127 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template for Jenkins Server (MediTrack CI/CD)
+
+Parameters:
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair for SSH access
+
+Mappings:
+  # Amazon Linux 2 AMI IDs by region
+  RegionMap:
+    us-east-1:
+      AMI: ami-0c02fb55956c7d316
+    us-west-2:
+      AMI: ami-0a8e758f5e873d1c1
+    eu-west-1:
+      AMI: ami-0d71ea30463e0ff8d
+    ap-southeast-1:
+      AMI: ami-0dc5785603ad4ff54
+
+Resources:
+  # IAM Role with EC2 permissions
+  JenkinsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: JenkinsServerRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEC2FullAccess
+
+  # IAM Instance Profile
+  JenkinsInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: JenkinsInstanceProfile
+      Roles:
+        - !Ref JenkinsRole
+
+  # Security Group
+  JenkinsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for Jenkins Server
+      SecurityGroupIngress:
+        # SSH access
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: SSH access
+        # Jenkins UI access
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+          Description: Jenkins UI
+      SecurityGroupEgress:
+        # Allow all outbound traffic
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: All outbound traffic
+
+  # EC2 Instance
+  JenkinsServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.medium
+      ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', AMI]
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref JenkinsInstanceProfile
+      SecurityGroupIds:
+        - !Ref JenkinsSecurityGroup
+      TagSpecifications:
+        - ResourceType: instance
+          Tags:
+            - Key: Name
+              Value: Jenkins-Server
+      UserData:
+          Fn::Base64: !Sub |
+          #!/bin/bash
+            yum update -y
+
+          # Install dependencies
+            yum install -y wget
+
+          # Install Java (stable for Jenkins)
+            amazon-linux-extras install java-openjdk11 -y
+
+          # Install Jenkins
+            wget -O /etc/yum.repos.d/jenkins.repo https://pkg.jenkins.io/redhat-stable/jenkins.repo
+            rpm --import https://pkg.jenkins.io/redhat-stable/jenkins.io.key
+            yum install -y jenkins
+
+          # Start Jenkins
+           systemctl start jenkins
+           systemctl enable jenkins
+
+          # Install Docker
+            amazon-linux-extras install -y docker
+            systemctl start docker
+            systemctl enable docker
+
+          # Allow Jenkins to use Docker
+            usermod -aG docker jenkins
+            systemctl restart docker
+
+          # Install Git
+            yum install -y git
+Outputs:
+  JenkinsServerPublicIP:
+    Description: Public IP of Jenkins Server
+    Value: !GetAtt JenkinsServer.PublicIp
+  JenkinsURL:
+    Description: Jenkins UI URL
+    Value: !Sub 'http://${JenkinsServer.PublicIp}:8080'
+  SecurityGroupId:
+    Description: Security Group ID
+    Value: !Ref JenkinsSecurityGroup
+  IAMRoleArn:
+    Description: IAM Role ARN
+    Value: !GetAtt JenkinsRole.Arn
