@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: CloudFormation template for Jenkins Server (MediTrack CI/CD)
+Description: Minimal CloudFormation template for a test EC2 server
 
 Parameters:
   KeyName:
@@ -18,32 +18,10 @@ Mappings:
       AMI: ami-0dc5785603ad4ff54
 
 Resources:
-  JenkinsRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: JenkinsServerRole
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ec2.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AmazonEC2FullAccess
-        - arn:aws:iam::aws:policy/IAMFullAccess
-
-  JenkinsInstanceProfile:
-    Type: AWS::IAM::InstanceProfile
-    Properties:
-      InstanceProfileName: JenkinsInstanceProfile
-      Roles:
-        - !Ref JenkinsRole
-
-  JenkinsSecurityGroup:
+  TestSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Security Group for Jenkins Server
+      GroupDescription: Security Group for test EC2
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 22
@@ -51,66 +29,39 @@ Resources:
           CidrIp: 0.0.0.0/0
           Description: SSH access
         - IpProtocol: tcp
-          FromPort: 8080
-          ToPort: 8080
+          FromPort: 80
+          ToPort: 80
           CidrIp: 0.0.0.0/0
-          Description: Jenkins UI
+          Description: HTTP access
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
           Description: All outbound traffic
 
-  JenkinsServer:
+  TestServer:
     Type: AWS::EC2::Instance
     Properties:
-      InstanceType: t3.medium
+      InstanceType: t2.micro
       ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', AMI]
       KeyName: !Ref KeyName
-      IamInstanceProfile: !Ref JenkinsInstanceProfile
       SecurityGroupIds:
-        - !Ref JenkinsSecurityGroup
+        - !Ref TestSecurityGroup
       Tags:
         - Key: Name
-          Value: Jenkins-Server
+          Value: Test-Server
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
           yum update -y
-
-          # Install Java 11 (stable for Jenkins)
-          amazon-linux-extras install java-openjdk11 -y
-
-          # Install Jenkins
-          wget -O /etc/yum.repos.d/jenkins.repo https://pkg.jenkins.io/redhat-stable/jenkins.repo
-          rpm --import https://pkg.jenkins.io/redhat-stable/jenkins.io.key
-          yum install -y jenkins
-
-          systemctl start jenkins
-          systemctl enable jenkins
-
-          # Install Docker
-          amazon-linux-extras enable docker
-          yum install -y docker
-          systemctl start docker
-          systemctl enable docker
-
-          # Allow Jenkins to use Docker
-          usermod -aG docker jenkins
-          systemctl restart docker
-
-          # Install Git
-          yum install -y git
+          yum install -y httpd
+          systemctl start httpd
+          systemctl enable httpd
+          echo "Hello from CloudFormation!" > /var/www/html/index.html
 
 Outputs:
-  JenkinsServerPublicIP:
-    Description: Public IP of Jenkins Server
-    Value: !GetAtt JenkinsServer.PublicIp
-  JenkinsURL:
-    Description: Jenkins UI URL
-    Value: !Sub 'http://${JenkinsServer.PublicIp}:8080'
-  SecurityGroupId:
-    Description: Security Group ID
-    Value: !Ref JenkinsSecurityGroup
-  IAMRoleArn:
-    Description: IAM Role ARN
-    Value: !GetAtt JenkinsRole.Arn
+  TestServerPublicIP:
+    Description: Public IP of Test Server
+    Value: !GetAtt TestServer.PublicIp
+  TestServerURL:
+    Description: Public URL of Test Server
+    Value: !Sub 'http://${TestServer.PublicIp}'
