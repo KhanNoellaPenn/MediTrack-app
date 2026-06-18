@@ -4,7 +4,7 @@
 
 MediTrack is a hospital patient records API built with Python and Flask.
 
-This project goes beyond application development and demonstrates a full DevOps lifecycle, transforming a local application into a production-ready, cloud-deployed system using:
+This project goes beyond application development and demonstrates a full DevOps lifecycle, transforming a local application into a production ready, cloud deployed system using:
 
 - CI/CD automation (Jenkins)
 - Containerization (Docker)
