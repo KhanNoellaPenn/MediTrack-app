@@ -1,67 +1,116 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Minimal CloudFormation template for a test EC2 server
+Description: 'CloudFormation template to provision a Jenkins Master Server with Docker pre-installed.'
 
 Parameters:
   KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
     Type: AWS::EC2::KeyPair::KeyName
-    Description: Name of an existing EC2 KeyPair for SSH access
+    ConstraintDescription: Must be the name of an existing EC2 KeyPair.
+
+  InstanceType:
+    Description: WebServer EC2 instance type
+    Type: String
+    Default: t3.medium
+    AllowedValues: [t3.small, t3.medium, t3.large, m5.large, m5.xlarge]
+    ConstraintDescription: Must be a valid EC2 instance type. t3.medium or larger recommended.
+
+  SSHLocation:
+    Description: The IP address range that can be used to SSH to the EC2 instances
+    Type: String
+    MinLength: 9
+    MaxLength: 18
+    Default: 0.0.0.0/0
+    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
+    ConstraintDescription: Must be a valid IP CIDR range of the form x.x.x.x/x.
 
 Mappings:
+  # Ubuntu 22.04 LTS AMIs for major regions (as of mid-2026)
   RegionMap:
     us-east-1:
-      AMI: ami-0c02fb55956c7d316
+      AMI: ami-0c7217cdde317cfec
+    us-east-2:
+      AMI: ami-05fb0b8c1424f266b
     us-west-2:
-      AMI: ami-0a8e758f5e873d1c1
+      AMI: ami-008fe2fc65df48dac
     eu-west-1:
-      AMI: ami-0d71ea30463e0ff8d
-    ap-southeast-1:
-      AMI: ami-0dc5785603ad4ff54
+      AMI: ami-0694d931cee176e7d
 
 Resources:
-  TestSecurityGroup:
+  JenkinsSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Security Group for test EC2
+      GroupDescription: Enable SSH access via port 22 and Jenkins web UI via port 8080
       SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0 # Restrict this to your office/home IP in production!
         - IpProtocol: tcp
           FromPort: 22
           ToPort: 22
-          CidrIp: 0.0.0.0/0
-          Description: SSH access
-        - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
-          CidrIp: 0.0.0.0/0
-          Description: HTTP access
+          CidrIp: !Ref SSHLocation
       SecurityGroupEgress:
         - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
           CidrIp: 0.0.0.0/0
-          Description: All outbound traffic
 
-  TestServer:
+  JenkinsInstance:
     Type: AWS::EC2::Instance
     Properties:
-      InstanceType: t2.micro
-      ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', AMI]
+      InstanceType: !Ref InstanceType
       KeyName: !Ref KeyName
+      ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', AMI]
       SecurityGroupIds:
-        - !Ref TestSecurityGroup
-      Tags:
-        - Key: Name
-          Value: Test-Server
+        - !Ref JenkinsSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 30 # 30GB recommended minimum for build workspaces
+            VolumeType: gp3
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
-          yum update -y
-          yum install -y httpd
-          systemctl start httpd
-          systemctl enable httpd
-          echo "Hello from CloudFormation!" > /var/www/html/index.html
+          # Pipe logs so you can monitor progress
+          exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+          
+          echo "=== Core Updates ==="
+          apt-get update -y && apt-get upgrade -y
+          
+          echo "=== Installing Java 17 ==="
+          apt-get install -y openjdk-17-jdk openjdk-17-jre
+          
+          echo "=== Installing Jenkins ==="
+          curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key | sudo tee \
+            /usr/share/keyrings/jenkins-keyring.asc > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] \
+            https://pkg.jenkins.io/debian-stable binary/" | sudo tee \
+            /etc/apt/sources.list.d/jenkins.list > /dev/null
+          apt-get update -y
+          apt-get install -y jenkins
+          systemctl start jenkins
+          systemctl enable jenkins
+          
+          echo "=== Installing Docker ==="
+          apt-get install -y apt-transport-https ca-certificates curl software-properties-common
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+          apt-get update -y
+          apt-get install -y docker-ce docker-ce-cli containerd.io
+          systemctl start docker
+          systemctl enable docker
+          
+          echo "=== Configuring Permissions ==="
+          # Grant Jenkins permissions to build Docker images without needing sudo
+          usermod -aG docker jenkins
+          systemctl restart jenkins
+          
+          echo "=== Setup Complete ==="
 
 Outputs:
-  TestServerPublicIP:
-    Description: Public IP of Test Server
-    Value: !GetAtt TestServer.PublicIp
-  TestServerURL:
-    Description: Public URL of Test Server
-    Value: !Sub 'http://${TestServer.PublicIp}'
+  JenkinsURL:
+    Description: URL for the Jenkins Web UI
+    Value: !Sub 'http://${JenkinsInstance.PublicIp}:8080'
+  PublicIP:
+    Description: Public IP of the Jenkins Instance
+    Value: !GetAtt JenkinsInstance.PublicIp
